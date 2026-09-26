@@ -1,6 +1,8 @@
 # Exercise repository
 - https://github.com/ak5154639/fs-containers
 
+This is my University of Helsinki Full Stack Open Part 12 exercise repository. It contains a containerized blog app with a React/Vite frontend, Express API, MongoDB database, and Nginx reverse proxy, with separate development and production Docker Compose setups.
+
 # Blog App
 
 ## Requirements

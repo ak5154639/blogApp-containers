@@ -1,0 +1,130 @@
+name: Blog App Deployment Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build_and_test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TEST_MONGODB_URI: ${{ secrets.TEST_MONGODB_URI }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            backend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run frontend component tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Copy frontend build to backend
+        run: |
+          rm -rf backend/dist
+          cp -R frontend/dist backend/dist
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run backend API tests
+        working-directory: backend
+        env:
+          NODE_ENV: test
+        run: npm test
+
+  deploy:
+    name: Deploy production
+    needs: build_and_test
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger Render deployment
+        env:
+          deploy_url: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          test -n "$deploy_url" || {
+            echo "RENDER_DEPLOY_HOOK is not configured"
+            exit 1
+          }
+          curl --fail --show-error --silent --location --request POST "$deploy_url"
+
+  notify_failure:
+    name: Notify failure
+    needs: [build_and_test, deploy]
+    if: ${{ always() && (needs.build_and_test.result == 'failure' || needs.deploy.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure notification
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          status: failure
+          content: "Blog App deployment failed."
+          title: "Blog App pipeline failed"
+          description: "Build or deployment failed. Check the GitHub Actions logs."
+
+  notify_success:
+    name: Notify success
+    needs: [build_and_test, deploy]
+    if: ${{ always() && needs.build_and_test.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send success notification
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          status: success
+          content: "Blog App deployment succeeded."
+          title: "Blog App pipeline succeeded"
+          description: "Build and deployment checks completed successfully."
+
+  tag_release:
+    name: Tag release
+    needs: [build_and_test, deploy, notify_success]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build_and_test.result == 'success' && needs.deploy.result == 'success' && needs.notify_success.result == 'success' && !contains(join(github.event.commits.*.message, ' '), '#skip') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create release tag
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BUMP: patch
+          WITH_V: true

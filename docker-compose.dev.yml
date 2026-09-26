@@ -1,0 +1,58 @@
+name: blogapp-dev
+
+services:
+  frontend:
+    image: blogapp-frontend:dev
+    build: 
+      context: ./frontend
+      dockerfile: dev.Dockerfile
+    volumes:
+      - ./frontend:/usr/src/app
+      - /usr/src/app/node_modules
+    environment:
+      - VITE_BACKEND_URL=/api
+
+
+  backend:
+    image: blogapp-backend:dev
+    build: 
+      context: ./backend
+      dockerfile: dev.Dockerfile
+    volumes:
+      - ./backend:/usr/src/app
+      - /usr/src/app/node_modules
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/blogapp
+      PORT: 3001
+      SECRET: blogapp-dev-only-secret
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:27017:27017
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    image: nginx:1.29
+    volumes:
+      - ./nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - 8081:80
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_started
+
+volumes:
+  mongo_data:
